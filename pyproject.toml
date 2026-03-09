@@ -1,0 +1,13 @@
+[project]
+name = "chess-rllm"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "chess",
+    "rllm[tinker]",
+]
+
+[tool.uv.sources]
+rllm = { git = "https://github.com/rllm-org/rllm.git", rev = "dev-cli" }
