@@ -36,6 +36,22 @@ _USER_PREFIX = (
 )
 _USER_SUFFIX = "\n\nGive your answer in <answer>...</answer> tags."
 
+_MAX_CENTIPAWNS = 10_000  # cap for mate scores
+
+
+def _top3_cot(top3_sans: list[str]) -> str:
+    """Return shuffled top-3 candidate moves as a CoT prefix (chess_llm style).
+
+    Applies 5 % noise: each candidate has a 5 % chance of being replaced by a
+    random other candidate, encouraging the model to reason rather than memorise.
+    """
+    shuffled = top3_sans.copy()
+    random.shuffle(shuffled)
+    for i in range(len(shuffled)):
+        if random.random() < 0.05:
+            shuffled[i] = random.choice(top3_sans)
+    return ", ".join(shuffled) + "</think>"
+
 
 def _positions_from_pgn(movetext: str, sample_every: int, min_ply: int, max_ply: int) -> list[str]:
     """Return FEN strings sampled from a PGN game."""
@@ -56,31 +72,8 @@ def _worker_init():
     random.seed(os.getpid())
 
 
-def _analyze_fen(fen: str) -> dict | None:
-    """Return {messages: [...]} for a FEN, or None on error."""
-    try:
-        board = chess.Board(fen)
-        if board.is_game_over():
-            return None
-        with chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH) as engine:
-            result = engine.play(board, chess.engine.Limit(time=0.05))
-        if result.move is None:
-            return None
-        best_san = board.san(result.move)
-        user_content = _USER_PREFIX + fen + _USER_SUFFIX
-        assistant_content = f"<answer>{best_san}</answer>"
-        return {
-            "messages": [
-                {"role": "user", "content": user_content},
-                {"role": "assistant", "content": assistant_content},
-            ]
-        }
-    except Exception:
-        return None
-
-
 def _analyze_batch(fens: list[str]) -> list[dict]:
-    """Analyze a batch of FENs in a single worker (reuses one engine process)."""
+    """Analyze a batch of FENs, producing top-3 scored moves + CoT messages."""
     results = []
     try:
         with chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH) as engine:
@@ -89,16 +82,30 @@ def _analyze_batch(fens: list[str]) -> list[dict]:
                     board = chess.Board(fen)
                     if board.is_game_over():
                         continue
-                    result = engine.play(board, chess.engine.Limit(time=0.05))
-                    if result.move is None:
+                    infos = engine.analyse(board, chess.engine.Limit(time=0.25), multipv=3)
+                    moves: dict[str, dict] = {}
+                    for info in infos:
+                        if "pv" not in info or not info["pv"]:
+                            continue
+                        mv = info["pv"][0]
+                        san = board.san(mv)
+                        pov = info["score"].relative
+                        cp = _MAX_CENTIPAWNS if pov.is_mate() else pov.score()
+                        moves[san] = {"score": cp}
+                    if not moves:
                         continue
-                    best_san = board.san(result.move)
+                    best_san = max(moves, key=lambda s: moves[s]["score"])
+                    top3 = sorted(moves, key=lambda s: moves[s]["score"], reverse=True)
                     user_content = _USER_PREFIX + fen + _USER_SUFFIX
+                    assistant_content = _top3_cot(top3) + f"<answer>{best_san}</answer>"
                     results.append({
+                        "fen": fen,
+                        "move": best_san,
+                        "moves": moves,
                         "messages": [
                             {"role": "user", "content": user_content},
-                            {"role": "assistant", "content": f"<answer>{best_san}</answer>"},
-                        ]
+                            {"role": "assistant", "content": assistant_content},
+                        ],
                     })
                 except Exception:
                     continue
@@ -144,9 +151,12 @@ def main():
     batches = [all_fens[i:i + args.batch_size] for i in range(0, len(all_fens), args.batch_size)]
 
     written = 0
+    analyzed = 0
+    total_batches = len(batches)
     with out_path.open("w") as f:
         with mp.Pool(args.workers, initializer=_worker_init) as pool:
             for i, examples in enumerate(pool.imap_unordered(_analyze_batch, batches, chunksize=1)):
+                analyzed += args.batch_size
                 for ex in examples:
                     f.write(json.dumps(ex) + "\n")
                     written += 1
@@ -155,8 +165,16 @@ def main():
                         break
                 if written >= args.n:
                     break
-                if (i + 1) % 100 == 0:
-                    logger.info(f"  {written}/{args.n} examples written ({100*(i+1)/len(batches):.1f}% batches done)")
+                pct = 100 * (i + 1) / total_batches
+                kept_rate = written / analyzed if analyzed else 0
+                sys.stdout.write(
+                    f"\r  [{i+1}/{total_batches} batches | {pct:.1f}%]  "
+                    f"written {written}/{args.n}  "
+                    f"keep rate {kept_rate:.1%}  "
+                    f"workers {args.workers}"
+                )
+                sys.stdout.flush()
+    sys.stdout.write("\n")
 
     logger.info(f"Done. Wrote {written} examples to {out_path}")
 

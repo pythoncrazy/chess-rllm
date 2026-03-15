@@ -23,7 +23,7 @@ trainer:
   experiment_name: "stockfish-sft"
   default_local_dir: "/tmp/rllm-chess-sft-checkpoints"
   save_freq: 50
-  test_freq: 25
+  test_freq: 500
 
 data:
   train_files: null
@@ -31,6 +31,7 @@ data:
   train_batch_size: 32
   micro_batch_size_per_gpu: 32
   max_length: 512
+  val_max_samples: 320
   renderer_name: "qwen3"
   rllm:
     tokenize_and_mask_method: "stepwise"  # use LAST_ASSISTANT_MESSAGE to avoid renderer extension warning

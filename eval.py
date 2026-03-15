@@ -60,10 +60,18 @@ def chess_reward_fn(task_info: dict, action: str) -> RewardOutput:
     if moves_dict and predicted in moves_dict:
         raw = moves_dict[predicted]
         score = int(raw["score"]) if isinstance(raw, dict) else int(raw)
-        best_score = max(
-            (int(v["score"]) if isinstance(v, dict) else int(v)) for v in moves_dict.values()
-        )
-        reward = max(0.0, min(1.0, score / best_score)) if best_score > 0 else 0.0
+        all_scores = [(int(v["score"]) if isinstance(v, dict) else int(v)) for v in moves_dict.values()]
+        best_score = max(all_scores)
+        min_score = min(all_scores)
+        score_range = best_score - min_score
+        # Map [min, max] -> [_LEGAL_FLOOR, 1.0]: worst top-3 move still earns
+        # credit for being a Stockfish-considered candidate; only illegal moves
+        # (not in moves_dict) get 0.
+        _LEGAL_FLOOR = 0.4
+        if score_range > 0:
+            reward = _LEGAL_FLOOR + (1.0 - _LEGAL_FLOOR) * (score - min_score) / score_range
+        else:
+            reward = 1.0  # all top-3 moves are equal
     else:
         # Small legality reward so GRPO has gradient signal even before any correct moves
         reward = 1.0 if is_best else 0.1
