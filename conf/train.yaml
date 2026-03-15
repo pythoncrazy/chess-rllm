@@ -14,9 +14,23 @@ hydra:
 #   run_name="grpo-longer-horizon"
 run_name: ???
 
+training:
+  group_size: 8           # 8 samples per position is enough for GRPO; halves rollout count vs default 16
+
+data:
+  train_batch_size: 32    # 32 positions × 8 rollouts = 256 total per step
+  max_response_length: 512  # chess moves + short CoT are well under 512 tokens; default 8192 wastes time
+
+workflow:
+  n_parallel_tasks: 512   # run all 256 rollouts in one wave (up from 256)
+
 rllm:
   trainer:
     project_name: "chess-grpo"
     experiment_name: "grpo-${run_name}"
     default_local_dir: "checkpoints/grpo/${run_name}"
     logger: ["console", "ui"]
+    max_steps: 50           # 50 steps/epoch × 10 epochs = 500 gradient updates total
+    total_epochs: 10
+    save_freq: 25
+    test_freq: 10
