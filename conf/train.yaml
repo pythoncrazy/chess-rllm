@@ -5,6 +5,18 @@ defaults:
 
 hydra:
   run:
-    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    dir: outputs/grpo/${run_name}
   searchpath:
     - pkg://rllm.experimental.config
+
+# Required: short description of what's new in this run, e.g.:
+#   run_name="sft-warmstart-top3"
+#   run_name="grpo-longer-horizon"
+run_name: ???
+
+rllm:
+  trainer:
+    project_name: "chess-grpo"
+    experiment_name: "grpo-${run_name}"
+    default_local_dir: "checkpoints/grpo/${run_name}"
+    logger: ["console", "ui"]

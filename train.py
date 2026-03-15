@@ -47,9 +47,8 @@ def main(config: DictConfig) -> None:
     min_ply: int = config.get("min_ply", 20)
     max_ply: int = config.get("max_ply", 80)
 
-    OmegaConf.update(config, "rllm.trainer.logger", list(config.rllm.trainer.logger) + ["ui"], merge=True)
-
-    log_dir = config.get("log_dir", "outputs/rollouts")
+    run_name = config.get("run_name", "unnamed")
+    log_dir = config.get("log_dir", f"outputs/rollouts/{run_name}")
     _setup_rollout_file_logging(log_dir)
 
     register_lichess_games("chess", "train", max_train, sample_every, min_ply, max_ply)

@@ -1,10 +1,15 @@
 #!/bin/bash
 # Wait for SFT to complete, then launch GRPO from final checkpoint
+# Usage: bash launch_grpo_after_sft.sh <sft_run_name> <grpo_run_name>
+#   e.g. bash launch_grpo_after_sft.sh top3-cot-bs512 sft-warmstart-top3
 
-LOG=/home/supersketchy/git/chess-rllm/outputs/sft-top3-cot-bs512.log
-CKPT_DIR=/home/supersketchy/git/chess-rllm/checkpoints/sft/top3-cot-bs512/checkpoints.jsonl
-GRPO_LOG=/home/supersketchy/git/chess-rllm/outputs/grpo-from-sft.log
-GRPO_PIDFILE=/home/supersketchy/git/chess-rllm/outputs/grpo.pid
+SFT_RUN=${1:-top3-cot-bs512}
+GRPO_RUN=${2:?Usage: $0 <sft_run_name> <grpo_run_name>}
+
+LOG=/home/supersketchy/git/chess-rllm/outputs/sft-${SFT_RUN}.log
+CKPT_DIR=/home/supersketchy/git/chess-rllm/checkpoints/sft/${SFT_RUN}/checkpoints.jsonl
+GRPO_LOG=/home/supersketchy/git/chess-rllm/outputs/grpo-${GRPO_RUN}.log
+GRPO_PIDFILE=/home/supersketchy/git/chess-rllm/outputs/grpo-${GRPO_RUN}.pid
 
 echo "[$(date)] Monitoring SFT run for completion..." | tee -a $GRPO_LOG
 
@@ -31,7 +36,7 @@ rm -f /tmp/rllm-tinker-checkpoints/checkpoints.jsonl 2>/dev/null
 
 cd /home/supersketchy/git/chess-rllm
 
-echo "[$(date)] Launching GRPO training..." | tee -a $GRPO_LOG
-nohup uv run python train.py "training.resume_from_tinker_id=${FINAL_CKPT}" >> $GRPO_LOG 2>&1 &
+echo "[$(date)] Launching GRPO training as run '${GRPO_RUN}'..." | tee -a $GRPO_LOG
+nohup uv run python train.py "run_name=${GRPO_RUN}" "training.resume_from_tinker_id=${FINAL_CKPT}" >> $GRPO_LOG 2>&1 &
 echo $! > $GRPO_PIDFILE
 echo "[$(date)] GRPO launched with PID $(cat $GRPO_PIDFILE)" | tee -a $GRPO_LOG
