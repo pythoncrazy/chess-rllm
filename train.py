@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import logging
+import os
+from pathlib import Path
+
 import hydra
 from omegaconf import DictConfig, OmegaConf
 from rllm.data.dataset import DatasetRegistry
@@ -7,6 +11,18 @@ from rllm.experimental.unified_trainer import AgentTrainer
 
 from data import register_lichess_games, register_puzzles
 from eval import ChessWorkflow, chess_reward_fn
+
+
+def _setup_rollout_file_logging(log_dir: str) -> None:
+    """Redirect eval (rollout) logs to a file instead of console."""
+    Path(log_dir).mkdir(parents=True, exist_ok=True)
+    log_path = os.path.join(log_dir, "rollouts.log")
+    handler = logging.FileHandler(log_path, mode="a")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    eval_logger = logging.getLogger("eval")
+    eval_logger.addHandler(handler)
+    eval_logger.propagate = False  # don't also print to console
+    logging.getLogger(__name__).info(f"Rollout logs -> {log_path}")
 
 
 @hydra.main(config_path="conf", config_name="train", version_base=None)
@@ -32,6 +48,9 @@ def main(config: DictConfig) -> None:
     max_ply: int = config.get("max_ply", 80)
 
     OmegaConf.update(config, "rllm.trainer.logger", list(config.rllm.trainer.logger) + ["ui"], merge=True)
+
+    log_dir = config.get("log_dir", "outputs/rollouts")
+    _setup_rollout_file_logging(log_dir)
 
     register_lichess_games("chess", "train", max_train, sample_every, min_ply, max_ply)
     if val_puzzles:
