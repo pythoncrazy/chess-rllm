@@ -8,3 +8,11 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Checkpoints and outputs
+checkpoints/
+outputs/
+
+# Data and secrets
+data/
+.env

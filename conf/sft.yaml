@@ -9,6 +9,11 @@ hydra:
 
 tinker_base_url: null
 
+# Required: short description of what's new in this run, e.g.:
+#   run_name="top3-cot-bs512"
+#   run_name="top3-cot-depth25"
+run_name: ???
+
 model:
   name: "Qwen/Qwen3.5-4B"
   lora_rank: 32
@@ -20,16 +25,16 @@ trainer:
   total_epochs: 1
   logger: ["console", "ui"]
   project_name: "chess-sft"
-  experiment_name: "stockfish-sft"
-  default_local_dir: "/tmp/rllm-chess-sft-checkpoints"
+  experiment_name: "sft-${run_name}"
+  default_local_dir: "checkpoints/sft/${run_name}"
   save_freq: 50
   test_freq: 500
 
 data:
   train_files: null
   val_files: null
-  train_batch_size: 32
-  micro_batch_size_per_gpu: 32
+  train_batch_size: 512
+  micro_batch_size_per_gpu: 512
   max_length: 512
   val_max_samples: 320
   renderer_name: "qwen3"
@@ -37,7 +42,7 @@ data:
     tokenize_and_mask_method: "stepwise"  # use LAST_ASSISTANT_MESSAGE to avoid renderer extension warning
 
 optim:
-  lr: 1e-4
+  lr: 1.6e-3
   lr_scheduler: "cosine"
   betas: [0.9, 0.95]
   eps: 1e-8
