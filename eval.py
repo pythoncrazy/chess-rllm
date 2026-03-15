@@ -1,106 +1,132 @@
 from __future__ import annotations
 
+import logging
 import re
+from collections import defaultdict
 
 import chess
-from openai import OpenAI
+import numpy as np
+from rllm.agents.agent import Episode, Step, Trajectory
+from rllm.rewards.reward_types import RewardOutput
+from rllm.workflows.simple_workflow import SimpleWorkflow
+from rllm.workflows.workflow import TerminationEvent, TerminationReason
 
-from rllm.experimental.eval.types import AgentConfig, EvalOutput, Signal, _extract_agent_answer
-from rllm.types import Episode, Step, Trajectory
+logger = logging.getLogger(__name__)
 
-_SYSTEM_PROMPT = (
+_USER_PROMPT_PREFIX = (
     "You are a grandmaster chess player. "
-    "Given a chess position in FEN notation, list your top candidate moves "
-    "inside <think>...</think>, then give the best move in <answer>...</answer>. "
-    "Keep thinking to a short comma-separated list of moves only — no explanations. "
-    "Example: <think>Rxe7, Nf5, Qh5</think><answer>Rxe7</answer>"
+    "What should I respond in the following position, given in FEN notation?  "
 )
+_USER_PROMPT_SUFFIX = "\n\nGive your answer in <answer>...</answer> tags."
 
 
-class ChessAgent:
-    """Agent that queries an LLM to predict the best move for a chess position."""
+def chess_reward_fn(task_info: dict, action: str) -> RewardOutput:
+    """Evaluate a predicted chess move against the reference move in the task.
 
-    def run(self, task: dict, config: AgentConfig) -> Episode:
-        """Run the agent on a single chess task.
+    Extracts the move from ``<answer>...</answer>`` tags, accepts both SAN and UCI
+    notation, and falls back to binary reward when no Stockfish ``"moves"`` dict
+    is present.
 
-        Args:
-            task (dict): Task dict with at least a ``"fen"`` key.
-            config (AgentConfig): Runtime config providing ``base_url`` and ``model``.
+    Args:
+        task_info (dict): Task row with ``"fen"``, ``"move"`` (SAN), and optionally
+            ``"moves"`` (dict mapping SAN -> ``{"score": int}``).
+        action (str): Raw model response string.
 
-        Returns:
-            Episode: Episode with the predicted move in ``artifacts["answer"]``.
-        """
-        client = OpenAI(base_url=config.base_url, api_key="none")
-        response = client.chat.completions.create(
-            model=config.model,
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": task["fen"] + "</board>"},
-            ],
-            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
-        )
-        output = response.choices[0].message.content or ""
-        m = re.search(r"<answer>(.*?)</answer>", output, re.DOTALL)
-        answer = m.group(1).strip() if m else output.strip().split()[-1]
-        return Episode(
-            trajectories=[Trajectory(steps=[Step(output=output)], output=output)],
-            artifacts={"answer": answer},
-        )
-
-
-class ChessEvaluator:
-    """Evaluator for chess move quality using python-chess.
-
-    Reward is proportional to move score when a ``"moves"`` dict is present in
-    the task, otherwise binary (1.0 for best move, 0.0 otherwise). Illegal moves
-    always receive 0.0.
+    Returns:
+        RewardOutput: Reward in ``[0, 1]`` with ``is_correct`` flag.
     """
+    if not isinstance(action, str):
+        action = action.action
+    m = re.search(r"<answer>(.*?)</answer>", action, re.DOTALL)
+    predicted = m.group(1).strip() if m else ""
+    predicted = predicted.rstrip("!?")
 
-    def evaluate(self, task: dict, episode: Episode) -> EvalOutput:
-        """Evaluate a chess episode against the ground-truth best move.
+    board = chess.Board(task_info["fen"])
+    # Normalize SAN keys by stripping check/mate symbols for fuzzy matching
+    san_map = {board.san(mv): mv for mv in board.legal_moves}
+    san_map_norm = {s.rstrip("+#"): mv for s, mv in san_map.items()}
+    uci_map = {mv.uci(): mv for mv in board.legal_moves}
+    move = san_map.get(predicted) or san_map_norm.get(predicted) or uci_map.get(predicted)
+
+    if move is None:
+        logger.info("ILLEGAL  fen=%-72s predicted=%-10s response=%s", task_info["fen"], predicted, action[:200])
+        return RewardOutput(reward=0.0, is_correct=False, metadata={"legal": False})
+
+    best_str = task_info["move"]
+    best_move = san_map.get(best_str) or uci_map.get(best_str)
+    is_best = move == best_move
+
+    moves_dict: dict | None = task_info.get("moves")
+    if moves_dict and predicted in moves_dict:
+        raw = moves_dict[predicted]
+        score = int(raw["score"]) if isinstance(raw, dict) else int(raw)
+        best_score = max(
+            (int(v["score"]) if isinstance(v, dict) else int(v)) for v in moves_dict.values()
+        )
+        reward = max(0.0, min(1.0, score / best_score)) if best_score > 0 else 0.0
+    else:
+        # Small legality reward so GRPO has gradient signal even before any correct moves
+        reward = 1.0 if is_best else 0.1
+
+    logger.info("%-7s  fen=%-72s predicted=%-10s expected=%-10s reward=%.2f", "CORRECT" if is_best else "WRONG", task_info["fen"], predicted, best_str, reward)
+    return RewardOutput(reward=reward, is_correct=is_best, metadata={"legal": True, "is_correct": is_best})
+
+
+class ChessWorkflow(SimpleWorkflow):
+    """Single-turn chess workflow that injects the system prompt and FEN as messages."""
+
+    async def run(self, task: dict, uid: str, **kwargs) -> Episode:
+        """Run one chess turn: build messages from FEN and evaluate the response.
 
         Args:
-            task (dict): Task dict with ``"fen"``, ``"move"`` (best move in SAN),
-                and optionally ``"moves"`` (dict mapping move -> ``{"score": int}``).
-            episode (Episode): Episode produced by ``ChessAgent``.
+            task (dict): Task row with at least a ``"fen"`` key.
+            uid (str): Unique rollout identifier.
 
         Returns:
-            EvalOutput: Result with ``legality``, ``accuracy``, and ``move_quality`` signals.
+            Episode: Completed episode with reward.
         """
-        predicted = _extract_agent_answer(episode).strip()
-        board = chess.Board(task["fen"])
-        san_map = {board.san(m): m for m in board.legal_moves}
-        uci_map = {m.uci(): m for m in board.legal_moves}
-        move = san_map.get(predicted) or uci_map.get(predicted)
+        self.reset(task, uid)
+        messages = [{"role": "user", "content": _USER_PROMPT_PREFIX + task["fen"] + _USER_PROMPT_SUFFIX}]
 
-        if move is None:
-            return EvalOutput(
-                reward=0.0,
-                is_correct=False,
-                signals=[Signal("legality", 0.0), Signal("accuracy", 0.0), Signal("move_quality", 0.0)],
+        from rllm.engine import ModelOutput
+        output: ModelOutput = await self.rollout_engine.get_model_response(messages, application_id=uid, **kwargs)
+        logger.info("PROMPT   %s", messages[0]["content"])
+        logger.info("RESPONSE %s", (output.content or "")[:300])
+        action_str = output.content
+        reward_result = self.reward_function({**task, "messages": messages}, action_str)
+
+        trajectory = self.agent.trajectory
+        trajectory.steps.append(
+            Step(
+                chat_completions=messages + [{"role": "assistant", "content": output.content, "reasoning": output.reasoning}],
+                thought=output.reasoning,
+                action=action_str,
+                reward=reward_result.reward,
+                model_output=output,
+                metadata=reward_result.metadata,
             )
-
-        best_str = task["move"]
-        best_move = san_map.get(best_str) or uci_map.get(best_str)
-        is_best = move == best_move
-
-        moves_dict: dict | None = task.get("moves")
-        if moves_dict and predicted in moves_dict:
-            raw = moves_dict[predicted]
-            score = int(raw["score"]) if isinstance(raw, dict) else int(raw)
-            best_score = max(
-                (int(v["score"]) if isinstance(v, dict) else int(v)) for v in moves_dict.values()
-            )
-            reward = max(0.0, min(1.0, score / best_score)) if best_score > 0 else 0.0
-        else:
-            reward = 1.0 if is_best else 0.0
-
-        return EvalOutput(
-            reward=reward,
-            is_correct=is_best,
-            signals=[
-                Signal("accuracy", 1.0 if is_best else 0.0),
-                Signal("legality", 1.0),
-                Signal("move_quality", reward),
-            ],
         )
+        self.commit(agent=self.agent, reset=True)
+
+        if output.finish_reason == "length":
+            raise TerminationEvent(TerminationReason.MAX_RESPONSE_LENGTH_EXCEEDED)
+        raise TerminationEvent(TerminationReason.ENV_DONE)
+
+    def collect_metrics(self, episode: Episode) -> None:
+        """Collect reward and correctness metrics from the episode.
+
+        Args:
+            episode (Episode): Episode to collect metrics from.
+        """
+        rewards: list[float] = []
+        correct: list[float] = []
+        for traj in episode.trajectories:
+            rewards.append(traj.reward)
+            for step in traj.steps:
+                if step.metadata:
+                    correct.append(1.0 if step.metadata.get("is_correct") else 0.0)
+        episode.metrics = {
+            "default_traj_name_acc": float(np.mean(rewards)) if rewards else 0.0,
+            "percent_correct": float(np.mean(correct)) if correct else 0.0,
+            "num_correct": int(sum(correct)),
+        }

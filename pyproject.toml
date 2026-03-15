@@ -10,4 +10,4 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-rllm = { git = "https://github.com/rllm-org/rllm.git", rev = "dev-cli" }
+rllm = { git = "https://github.com/rllm-org/rllm.git" }

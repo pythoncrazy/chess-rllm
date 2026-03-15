@@ -1,0 +1,72 @@
+# @package _global_
+
+tinker_base_url: null
+fuse_forward_backward_and_optim_step: false
+
+model:
+  name: "Qwen/Qwen3.5-4B"
+  lora_rank: 32
+  train_unembed: true
+  train_attn: true
+  train_mlp: true
+
+training:
+  group_size: 16
+  learning_rate: 2e-5
+  lr_schedule: "constant"
+  warmup_steps_ratio: 0.0
+  beta1: 0.9
+  beta2: 0.95
+  eps: 1e-8
+  max_length: 32768
+  num_minibatches: 1
+  default_local_dir: '/tmp/rllm-tinker-checkpoints'
+  resume_from_tinker_id: null
+
+validation:
+  group_size: 1
+
+sampling:
+  train:
+    temperature: 1.0
+    top_p: 1.0
+    top_k: -1
+  val:
+    temperature: 1.0
+    top_p: 1.0
+    top_k: -1
+
+workflow:
+  n_parallel_tasks: 256
+  retry_limit: 0
+
+agent:
+  max_steps: 1
+  agent_args: {}
+
+rollout_engine:
+  reasoning_effort: "low"
+  accumulate_reasoning: false
+  disable_thinking: false
+  bypass_render_with_parser: true
+  renderer_name: null
+
+data:
+  train_files: null
+  val_files: null
+  max_prompt_length: 2048
+  max_response_length: 512
+  train_batch_size: 64
+  val_batch_size: 32
+
+opsd:
+  kl_penalty_coef: 1.0
+  kl_discount_factor: 0.0
+  teacher_messages_key: "teacher_messages"
+  teacher_policy_update_freq: -1
+
+rllm:
+  backend: tinker
+  rollout:
+    n: ${oc.select:training.group_size, 8}
+    n_val: ${oc.select:validation.group_size, 1}

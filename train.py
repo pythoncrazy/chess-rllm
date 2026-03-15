@@ -1,93 +1,53 @@
 from __future__ import annotations
 
-import click
-from omegaconf import OmegaConf
-from rllm.data import DatasetRegistry
-from rllm.experimental.cli.train import build_train_config, make_agent_run_func
+import hydra
+from omegaconf import DictConfig, OmegaConf
+from rllm.data.dataset import DatasetRegistry
 from rllm.experimental.unified_trainer import AgentTrainer
 
-from data import register_jsonl, register_puzzles
-from eval import ChessAgent, ChessEvaluator
+from data import register_lichess_games, register_puzzles
+from eval import ChessWorkflow, chess_reward_fn
 
 
-@click.command()
-@click.option("--model", default="Qwen/Qwen3-8B", show_default=True, help="Model name or HuggingFace path.")
-@click.option("--dataset", default="chess", show_default=True, help="Registered dataset name.")
-@click.option("--train-data", default=None, type=click.Path(exists=True), help="JSONL file to register as train split.")
-@click.option("--val-data", default=None, type=click.Path(exists=True), help="JSONL or puzzles JSON to register as test split.")
-@click.option("--puzzles", is_flag=True, default=False, help="Treat --val-data as a chess_llm puzzles.json file.")
-@click.option("--group-size", default=8, show_default=True, type=int, help="GRPO rollouts per prompt.")
-@click.option("--batch-size", default=16, show_default=True, type=int, help="Training batch size.")
-@click.option("--lr", default=2e-5, show_default=True, type=float, help="Learning rate.")
-@click.option("--lora-rank", default=32, show_default=True, type=int, help="LoRA rank.")
-@click.option("--epochs", default=1, show_default=True, type=int, help="Training epochs.")
-@click.option("--max-steps", default=None, type=int, help="Stop after N steps (overrides --epochs).")
-@click.option("--val-freq", default=5, show_default=True, type=int, help="Validate every N steps.")
-@click.option("--save-freq", default=20, show_default=True, type=int, help="Checkpoint every N steps.")
-@click.option("--project", default="chess-rllm", show_default=True, help="Project name for logging.")
-@click.option("--experiment", default=None, help="Experiment name (defaults to --dataset).")
-@click.option("--output", "output_dir", default="./checkpoints", show_default=True, type=click.Path(), help="Checkpoint directory.")
-@click.option("--max-response-length", default=8192, show_default=True, type=int, help="Max response tokens (increase for thinking models).")
-@click.option("--config", "config_file", default=None, type=click.Path(exists=True), help="YAML config merged over base templates.")
-def train(
-    model: str,
-    dataset: str,
-    train_data: str | None,
-    val_data: str | None,
-    puzzles: bool,
-    group_size: int,
-    batch_size: int,
-    lr: float,
-    lora_rank: int,
-    epochs: int,
-    max_steps: int | None,
-    val_freq: int,
-    save_freq: int,
-    project: str,
-    experiment: str | None,
-    output_dir: str,
-    max_response_length: int,
-    config_file: str | None,
-) -> None:
-    """Train a chess RL agent with GRPO via the Tinker backend."""
-    if train_data:
-        register_jsonl(train_data, dataset, "train")
-    if val_data:
-        register_puzzles(val_data, dataset, "test") if puzzles else register_jsonl(val_data, dataset, "test")
+@hydra.main(config_path="conf", config_name="train", version_base=None)
+def main(config: DictConfig) -> None:
+    """Train a chess RL agent with GRPO, streaming positions from Lichess/standard-chess-games.
 
-    train_ds = DatasetRegistry.load_dataset(dataset, "train")
-    val_ds = DatasetRegistry.load_dataset(dataset, "test") if val_data else None
+    Pass Hydra overrides on the CLI, e.g.::
 
-    agent = ChessAgent()
-    evaluator = ChessEvaluator()
+        python train.py rllm/backend=tinker +max_train=10000
 
-    config = build_train_config(
-        model_name=model,
-        group_size=group_size,
-        batch_size=batch_size,
-        lr=lr,
-        lora_rank=lora_rank,
-        total_epochs=epochs,
-        total_steps=max_steps,
-        val_freq=val_freq,
-        save_freq=save_freq,
-        project=project,
-        experiment=experiment or dataset,
-        output_dir=output_dir,
-        config_file=config_file,
-    )
-    config = OmegaConf.merge(config, OmegaConf.create({
-        "data": {"max_response_length": max_response_length},
-    }))
+    Args:
+        config (DictConfig): Hydra config merged from ``unified.yaml`` + ``rllm/backend/tinker.yaml``.
+            Extra keys: ``max_train`` (int, default 50000), ``max_val`` (int, default 1000),
+            ``val_puzzles`` (str path to chess_llm puzzles.json, optional),
+            ``sample_every`` (int, default 5), ``min_ply`` (int, default 20),
+            ``max_ply`` (int, default 80).
+    """
+    max_train: int = config.get("max_train", 50_000)
+    max_val: int = config.get("max_val", 1_000)
+    val_puzzles: str | None = config.get("val_puzzles", None)
+    sample_every: int = config.get("sample_every", 5)
+    min_ply: int = config.get("min_ply", 20)
+    max_ply: int = config.get("max_ply", 80)
+
+    OmegaConf.update(config, "rllm.trainer.logger", list(config.rllm.trainer.logger) + ["ui"], merge=True)
+
+    register_lichess_games("chess", "train", max_train, sample_every, min_ply, max_ply)
+    if val_puzzles:
+        register_puzzles(val_puzzles, "chess", "test")
+    else:
+        register_lichess_games("chess", "test", max_val, sample_every, min_ply, max_ply)
 
     AgentTrainer(
-        backend="tinker",
-        agent_run_func=make_agent_run_func(agent, evaluator, model),
+        workflow_class=ChessWorkflow,
+        workflow_args={"reward_function": chess_reward_fn},
         config=config,
-        train_dataset=train_ds,
-        val_dataset=val_ds,
+        train_dataset=DatasetRegistry.load_dataset("chess", "train"),
+        val_dataset=DatasetRegistry.load_dataset("chess", "test"),
+        backend="tinker",
     ).train()
 
 
 if __name__ == "__main__":
-    train()
+    main()
