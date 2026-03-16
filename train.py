@@ -9,7 +9,7 @@ from omegaconf import DictConfig, OmegaConf
 from rllm.data.dataset import DatasetRegistry
 from rllm.experimental.unified_trainer import AgentTrainer
 
-from data import register_lichess_games, register_puzzles
+from data import register_jsonl, register_lichess_games, register_puzzles
 from eval import ChessWorkflow, chess_reward_fn
 
 
@@ -42,6 +42,7 @@ def main(config: DictConfig) -> None:
     """
     max_train: int = config.get("max_train", 50_000)
     max_val: int = config.get("max_val", 1_000)
+    train_files: str | None = config.get("train_files", None)
     val_puzzles: str | None = config.get("val_puzzles", None)
     sample_every: int = config.get("sample_every", 5)
     min_ply: int = config.get("min_ply", 20)
@@ -51,7 +52,13 @@ def main(config: DictConfig) -> None:
     log_dir = config.get("log_dir", f"outputs/rollouts/{run_name}")
     _setup_rollout_file_logging(log_dir)
 
-    register_lichess_games("chess", "train", max_train, sample_every, min_ply, max_ply)
+    # If train_files is provided (e.g. SFT JSONL with pre-computed Stockfish scores),
+    # use that — it gives richer reward signal than raw Lichess game moves.
+    if train_files:
+        register_jsonl(train_files, "chess", "train")
+    else:
+        register_lichess_games("chess", "train", max_train, sample_every, min_ply, max_ply)
+
     if val_puzzles:
         register_puzzles(val_puzzles, "chess", "test")
     else:
