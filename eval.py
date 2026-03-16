@@ -12,7 +12,7 @@ from typing import Generator
 import chess
 import chess.engine
 import numpy as np
-from rllm.agents.agent import Episode, Step, Trajectory
+from rllm.agents.agent import Episode, Step
 from rllm.rewards.reward_types import RewardOutput
 from rllm.workflows.simple_workflow import SimpleWorkflow
 from rllm.workflows.workflow import TerminationEvent, TerminationReason
@@ -167,13 +167,15 @@ class ChessWorkflow(SimpleWorkflow):
         output: ModelOutput = await self.rollout_engine.get_model_response(messages, application_id=uid, **kwargs)
         logger.info("PROMPT   %s", messages[0]["content"])
         logger.info("RESPONSE %s", (output.content or "")[:300])
-        reward_result = self.reward_function({**task, "messages": messages}, output.content)
+        content: str = output.content or ""
+        reasoning: str = output.reasoning or ""
+        reward_result = self.reward_function({**task, "messages": messages}, content)
 
         self.agent.trajectory.steps.append(
             Step(
-                chat_completions=messages + [{"role": "assistant", "content": output.content, "reasoning": output.reasoning}],
-                thought=output.reasoning,
-                action=output.content,
+                chat_completions=messages + [{"role": "assistant", "content": content, "reasoning": reasoning}],
+                thought=reasoning,
+                action=content,
                 reward=reward_result.reward,
                 model_output=output,
                 metadata=reward_result.metadata,
@@ -194,7 +196,7 @@ class ChessWorkflow(SimpleWorkflow):
         rewards: list[float] = []
         correct: list[float] = []
         for traj in episode.trajectories:
-            rewards.append(traj.reward)
+            rewards.append(traj.reward or 0.0)
             for step in traj.steps:
                 if step.metadata:
                     correct.append(1.0 if step.metadata.get("is_correct") else 0.0)

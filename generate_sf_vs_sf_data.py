@@ -15,13 +15,13 @@ import json
 import multiprocessing as mp
 import os
 import random
-import sys
 import urllib.request
 import zipfile
 from pathlib import Path
 
 import chess
 import chess.engine
+from tqdm import tqdm
 
 STOCKFISH_PATH = os.environ.get("STOCKFISH_PATH", "stockfish")
 _USER_PREFIX = (
@@ -69,7 +69,8 @@ def _play_game(
         if random.random() < variation_rate:
             move = random.choice(list(board.legal_moves))
         else:
-            move = engine.play(board, chess.engine.Limit(time=move_time)).move
+            result = engine.play(board, chess.engine.Limit(time=move_time))
+            move = result.move or random.choice(list(board.legal_moves))
         board.push(move)
     return fens
 
@@ -135,25 +136,43 @@ def _analyze_positions(
     return rows
 
 
-def _worker(job: tuple[list[str], float, float, float, int]) -> list[dict]:
-    """Worker process: play games from openings and analyze sampled positions.
+_worker_engine: chess.engine.SimpleEngine | None = None
+_worker_move_time: float = 0.25
+_worker_analysis_time: float = 0.25
+_worker_variation_rate: float = 0.05
+_worker_sample_every: int = 3
+
+
+def _worker_init(move_time: float, analysis_time: float, variation_rate: float, sample_every: int) -> None:
+    """Pool initializer: start a persistent Stockfish engine for this worker.
 
     Args:
-        job (tuple[list[str], float, float, float, int]): Tuple of
-            (openings, move_time, analysis_time, variation_rate, sample_every).
+        move_time (float): Seconds per move during game play.
+        analysis_time (float): Seconds per position for multipv=3 analysis.
+        variation_rate (float): Fraction of game moves to randomize.
+        sample_every (int): Sample 1 position every N plies per game.
+    """
+    global _worker_engine, _worker_move_time, _worker_analysis_time, _worker_variation_rate, _worker_sample_every
+    random.seed(os.getpid())
+    _worker_engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH)
+    _worker_move_time = move_time
+    _worker_analysis_time = analysis_time
+    _worker_variation_rate = variation_rate
+    _worker_sample_every = sample_every
+
+
+def _worker(opening: str) -> list[dict]:
+    """Worker: play one game from an opening and analyze sampled positions.
+
+    Args:
+        opening (str): Starting FEN position.
 
     Returns:
-        list[dict]: Analyzed position rows from all games in this batch.
+        list[dict]: Analyzed position rows from this game.
     """
-    openings, move_time, analysis_time, variation_rate, sample_every = job
-    random.seed(os.getpid())
-    engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH)
-    rows: list[dict] = []
-    for opening in openings:
-        all_fens = _play_game(opening, engine, move_time, variation_rate)
-        rows.extend(_analyze_positions(all_fens[::sample_every], engine, analysis_time))
-    engine.quit()
-    return rows
+    assert _worker_engine is not None
+    all_fens = _play_game(opening, _worker_engine, _worker_move_time, _worker_variation_rate)
+    return _analyze_positions(all_fens[::_worker_sample_every], _worker_engine, _worker_analysis_time)
 
 
 def main() -> None:
@@ -161,8 +180,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--n", type=int, default=200_000, help="Target number of examples")
     parser.add_argument("--out", type=str, required=True, help="Output JSONL path")
-    parser.add_argument("--workers", type=int, default=min(mp.cpu_count(), 64))
-    parser.add_argument("--game-time", type=float, default=0.05, help="Seconds per move during game play")
+    parser.add_argument("--workers", type=int, default=mp.cpu_count())
+    parser.add_argument("--game-time", type=float, default=0.25, help="Seconds per move during game play")
     parser.add_argument("--analysis-time", type=float, default=0.25, help="Seconds per position for multipv=3 analysis")
     parser.add_argument("--variation-rate", type=float, default=0.05, help="Fraction of game moves to randomize")
     parser.add_argument("--sample-every", type=int, default=3, help="Sample 1 position every N plies per game")
@@ -176,30 +195,25 @@ def main() -> None:
     print(f"Loaded {len(openings)} openings.")
 
     positions_per_game = max(1, 80 // args.sample_every)
-    n_games = max(args.workers, -(-args.n * 2 // positions_per_game))  # ceiling div, min 1 per worker
+    n_games = max(args.workers, -(-args.n * 2 // positions_per_game))
     game_list = [random.choice(openings) for _ in range(n_games)]
 
-    chunk = max(1, len(game_list) // args.workers)
-    jobs = [
-        (game_list[i:i + chunk], args.game_time, args.analysis_time, args.variation_rate, args.sample_every)
-        for i in range(0, len(game_list), chunk)
-    ]
-
+    initargs = (args.game_time, args.analysis_time, args.variation_rate, args.sample_every)
     written = 0
-    with out_path.open("w") as f, mp.Pool(args.workers) as pool:
-        for rows in pool.imap_unordered(_worker, jobs):
-            for row in rows:
-                f.write(json.dumps(row) + "\n")
-                written += 1
+    with out_path.open("w") as f, tqdm(total=args.n, unit="pos") as bar:
+        with mp.Pool(args.workers, initializer=_worker_init, initargs=initargs) as pool:
+            for rows in pool.imap_unordered(_worker, game_list):
+                for row in rows:
+                    f.write(json.dumps(row) + "\n")
+                    written += 1
+                    bar.update(1)
+                    if written >= args.n:
+                        pool.terminate()
+                        break
                 if written >= args.n:
-                    pool.terminate()
                     break
-            if written >= args.n:
-                break
-            sys.stdout.write(f"\r  {written}/{args.n} ({100*written/args.n:.1f}%)")
-            sys.stdout.flush()
 
-    sys.stdout.write(f"\nDone. Wrote {written} examples to {out_path}\n")
+    print(f"Done. Wrote {written} examples to {out_path}")
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 import hydra
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 from rllm.data.dataset import DatasetRegistry
 from rllm.experimental.unified_trainer import AgentTrainer
 
