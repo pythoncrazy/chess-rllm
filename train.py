@@ -6,10 +6,9 @@ from pathlib import Path
 
 import hydra
 from omegaconf import DictConfig
-from rllm.data.dataset import DatasetRegistry
 from rllm.experimental.unified_trainer import AgentTrainer
 
-from data import register_jsonl, register_lichess_games, register_puzzles
+from data import get_dataset, register_jsonl, register_puzzles
 from eval import ChessWorkflow, chess_reward_fn
 
 
@@ -21,55 +20,48 @@ def _setup_rollout_file_logging(log_dir: str) -> None:
     handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
     eval_logger = logging.getLogger("eval")
     eval_logger.addHandler(handler)
-    eval_logger.propagate = False  # don't also print to console
+    eval_logger.propagate = False
     logging.getLogger(__name__).info(f"Rollout logs -> {log_path}")
 
 
 @hydra.main(config_path="conf", config_name="train", version_base=None)
 def main(config: DictConfig) -> None:
-    """Train a chess RL agent with GRPO, streaming positions from Lichess/standard-chess-games.
+    """Train a chess RL agent with GRPO from pre-generated JSONL datasets.
 
     Pass Hydra overrides on the CLI, e.g.::
 
-        python train.py rllm/backend=tinker +max_train=10000
+        python train.py run_name=grpo-v1 train_files=data/sf_train_grpo.jsonl val_files=data/sf_val.jsonl
 
     Args:
-        config (DictConfig): Hydra config merged from ``unified.yaml`` + ``rllm/backend/tinker.yaml``.
-            Extra keys: ``max_train`` (int, default 50000), ``max_val`` (int, default 1000),
-            ``val_puzzles`` (str path to chess_llm puzzles.json, optional),
-            ``sample_every`` (int, default 5), ``min_ply`` (int, default 20),
-            ``max_ply`` (int, default 80).
+        config (DictConfig): Hydra config merged from ``train.yaml``.
+            Required keys: ``train_files`` (JSONL path), ``val_files`` or ``val_puzzles``.
     """
-    max_train: int = config.get("max_train", 50_000)
-    max_val: int = config.get("max_val", 1_000)
-    train_files: str | None = config.get("train_files", None)
+    train_files: str = config.get("train_files")
+    val_files: str | None = config.get("val_files", None)
     val_puzzles: str | None = config.get("val_puzzles", None)
-    sample_every: int = config.get("sample_every", 5)
-    min_ply: int = config.get("min_ply", 20)
-    max_ply: int = config.get("max_ply", 80)
+
+    if not train_files:
+        raise ValueError("train_files must be set (path to JSONL)")
 
     run_name = config.get("run_name", "unnamed")
     log_dir = config.get("log_dir", f"outputs/rollouts/{run_name}")
     _setup_rollout_file_logging(log_dir)
 
-    # If train_files is provided (e.g. SFT JSONL with pre-computed Stockfish scores),
-    # use that — it gives richer reward signal than raw Lichess game moves.
-    if train_files:
-        register_jsonl(train_files, "chess", "train")
-    else:
-        register_lichess_games("chess", "train", max_train, sample_every, min_ply, max_ply)
+    register_jsonl(train_files, "chess", "train")
 
-    if val_puzzles:
+    if val_files:
+        register_jsonl(val_files, "chess", "test")
+    elif val_puzzles:
         register_puzzles(val_puzzles, "chess", "test")
     else:
-        register_lichess_games("chess", "test", max_val, sample_every, min_ply, max_ply)
+        raise ValueError("val_files or val_puzzles must be set")
 
     AgentTrainer(
         workflow_class=ChessWorkflow,
         workflow_args={"reward_function": chess_reward_fn},
         config=config,
-        train_dataset=DatasetRegistry.load_dataset("chess", "train"),
-        val_dataset=DatasetRegistry.load_dataset("chess", "test"),
+        train_dataset=get_dataset("chess", "train"),
+        val_dataset=get_dataset("chess", "test"),
         backend="tinker",
     ).train()
 

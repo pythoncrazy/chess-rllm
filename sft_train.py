@@ -2,29 +2,64 @@
 
 Usage:
     uv run python sft_train.py \\
-        train_files=data/sft_train.jsonl \\
-        val_files=data/sft_val.jsonl
+        data.train_files=data/sf_train.jsonl \\
+        data.val_files=data/sf_val.jsonl
 """
 
 from __future__ import annotations
 
-import json
 import logging
-from pathlib import Path
+import warnings
+from concurrent.futures import ThreadPoolExecutor
 
 import hydra
-from datasets import Dataset
+import tinker
+from datasets import load_dataset
 from omegaconf import DictConfig
 from rllm.trainer.agent_sft_trainer import AgentSFTTrainer
+from tinker_cookbook.supervised.common import datum_from_model_input_weights
+
+# TinkerSFTDataset lives in the deprecated module — we patch get_batch so that
+# the actual tokenisation no longer imports anything else from there.
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", FutureWarning)
+    from rllm.trainer.deprecated.tinker_sft_dataset import TinkerSFTDataset
 
 logger = logging.getLogger(__name__)
 
+_TOKENIZER_POOL = ThreadPoolExecutor(max_workers=32)
 
-def load_jsonl_as_dataset(path: str) -> Dataset:
+
+def _fast_get_batch(self, index: int) -> list[tinker.Datum]:
+    """Parallel drop-in replacement for TinkerSFTDataset.get_batch.
+
+    Fixes two bottlenecks in the original:
+    1. Replaces 512 individual self.dataset[i] calls with one Arrow batch slice.
+    2. Parallelises tokenisation across all rows with threads — the Rust-backed
+       Qwen3 tokeniser releases the GIL, so threads give real speedup.
+    """
+    start_idx = index * self.batch_size
+    end_idx = min(start_idx + self.batch_size, len(self.dataset))
+    batch = self.dataset[start_idx:end_idx]  # single vectorised Arrow slice
+    messages_list = batch["messages"]
+
+    def _tok(messages):
+        model_input, weights = self.renderer.build_supervised_example(
+            messages, train_on_what=self.train_on_what
+        )
+        return datum_from_model_input_weights(model_input, weights, self.max_length)
+
+    return list(_TOKENIZER_POOL.map(_tok, messages_list))
+
+
+TinkerSFTDataset.get_batch = _fast_get_batch
+
+
+def load_jsonl_as_dataset(path: str):
     """Load a JSONL file with 'messages' rows into a HuggingFace Dataset."""
-    rows = [json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()]
-    logger.info(f"Loaded {len(rows)} examples from {path}")
-    return Dataset.from_list(rows)
+    ds = load_dataset("json", data_files=path, split="train")
+    logger.info(f"Loaded {len(ds)} examples from {path}")
+    return ds
 
 
 @hydra.main(config_path="conf", config_name="sft", version_base=None)
@@ -38,12 +73,14 @@ def main(config: DictConfig) -> None:
     train_dataset = load_jsonl_as_dataset(train_files)
     val_dataset = load_jsonl_as_dataset(val_files) if val_files else None
 
-    AgentSFTTrainer(
-        config=config,
-        train_dataset=train_dataset,
-        val_dataset=val_dataset,
-        backend="tinker",
-    ).train()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)
+        AgentSFTTrainer(
+            config=config,
+            train_dataset=train_dataset,
+            val_dataset=val_dataset,
+            backend="tinker",
+        ).train()
 
 
 if __name__ == "__main__":

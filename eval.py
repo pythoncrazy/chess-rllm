@@ -23,12 +23,12 @@ _USER_PROMPT_PREFIX = (
     "You are a grandmaster chess player. "
     "What should I respond in the following position, given in FEN notation?  "
 )
-_USER_PROMPT_SUFFIX = "\n\nGive your answer in <answer>...</answer> tags."
+_USER_PROMPT_SUFFIX = "\n\nGive your answer in UCI notation (e.g. g1f3) in <answer>...</answer> tags."
 
 STOCKFISH_PATH = os.environ.get("STOCKFISH_PATH", "stockfish")
 _SF_POOL_SIZE = int(os.environ.get("SF_POOL_SIZE", "8"))
 _SF_TIME = float(os.environ.get("SF_TIME", "0.05"))
-_SF_LOSS_SCALE = float(os.environ.get("SF_LOSS_SCALE", "100"))
+_SF_LOSS_SCALE = float(os.environ.get("SF_LOSS_SCALE", "50"))
 _MAX_CP = 10_000
 
 _engine_pool: queue.Queue | None = None

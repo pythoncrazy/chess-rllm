@@ -14,5 +14,6 @@ checkpoints/
 outputs/
 
 # Data and secrets
+data_old/
 data/
 .env

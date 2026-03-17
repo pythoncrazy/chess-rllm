@@ -13,13 +13,16 @@ hydra:
 #   run_name="sft-warmstart-top3"
 #   run_name="grpo-longer-horizon"
 run_name: ???
+train_files: null
+val_files: null
+val_puzzles: null
 
 training:
   group_size: 8           # 8 samples per position is enough for GRPO; halves rollout count vs default 16
 
 data:
   train_batch_size: 32    # 32 positions × 8 rollouts = 256 total per step
-  max_response_length: 512  # chess moves + short CoT are well under 512 tokens; default 8192 wastes time
+  max_response_length: 128  # chess UCI + short CoT fit in 128 tokens; smaller = more concurrent Tinker batches
 
 workflow:
   n_parallel_tasks: 512   # run all 256 rollouts in one wave (up from 256)
