@@ -35,5 +35,5 @@ rllm:
     logger: ["console", "ui"]
     max_steps: 50           # 50 steps/epoch × 10 epochs = 500 gradient updates total
     total_epochs: 10
-    save_freq: 25
+    save_freq: 2
     test_freq: 10

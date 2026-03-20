@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "chess",
+    "google-genai>=1.68.0",
+    "python-dotenv>=1.2.2",
     "rllm[tinker]",
 ]
 

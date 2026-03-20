@@ -25,9 +25,26 @@ with warnings.catch_warnings():
     warnings.simplefilter("ignore", FutureWarning)
     from rllm.trainer.deprecated.tinker_sft_dataset import TinkerSFTDataset
 
+import random
+
 logger = logging.getLogger(__name__)
 
 _TOKENIZER_POOL = ThreadPoolExecutor(max_workers=32)
+_USER_PREFIX = "You are a grandmaster chess player. What should I respond in the following position, given in FEN notation?  "
+_USER_SUFFIX = "\n\nGive your answer in SAN notation (e.g. Nf3) in <answer>...</answer> tags."
+
+
+def _make_messages(fen: str, best: str, moves: dict) -> list[dict]:
+    top3 = sorted(moves, key=lambda s: moves[s]["score"], reverse=True)
+    shuffled = top3.copy()
+    random.shuffle(shuffled)
+    for i in range(len(shuffled)):
+        if random.random() < 0.05:
+            shuffled[i] = random.choice(top3)
+    return [
+        {"role": "user", "content": _USER_PREFIX + fen + _USER_SUFFIX},
+        {"role": "assistant", "content": ", ".join(shuffled) + f"</think><answer>{best}</answer>"},
+    ]
 
 
 def _fast_get_batch(self, index: int) -> list[tinker.Datum]:
@@ -40,8 +57,11 @@ def _fast_get_batch(self, index: int) -> list[tinker.Datum]:
     """
     start_idx = index * self.batch_size
     end_idx = min(start_idx + self.batch_size, len(self.dataset))
-    batch = self.dataset[start_idx:end_idx]  # single vectorised Arrow slice
-    messages_list = batch["messages"]
+    batch = self.dataset[start_idx:end_idx]
+    if "messages" in batch and batch["messages"][0] is not None:
+        messages_list = batch["messages"]
+    else:
+        messages_list = [_make_messages(f, m, t) for f, m, t in zip(batch["fen"], batch["move"], batch["moves"])]
 
     def _tok(messages):
         model_input, weights = self.renderer.build_supervised_example(

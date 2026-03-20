@@ -15,7 +15,7 @@ tinker_base_url: null
 run_name: ???
 
 model:
-  name: "moonshotai/Kimi-K2.5"
+  name: "Qwen/Qwen3.5-35B-A3B"
   lora_rank: 32
   train_unembed: true
   train_attn: true
@@ -37,12 +37,12 @@ data:
   micro_batch_size_per_gpu: 512
   max_length: 256
   val_max_samples: 320
-  renderer_name: "kimi_k25"
+  renderer_name: "qwen3"
   rllm:
     tokenize_and_mask_method: "stepwise"  # use LAST_ASSISTANT_MESSAGE to avoid renderer extension warning
 
 optim:
-  lr: 1.6e-3
+  lr: 1.0e-3
   lr_scheduler: "cosine"
   betas: [0.9, 0.95]
   eps: 1e-8

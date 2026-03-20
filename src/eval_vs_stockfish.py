@@ -38,15 +38,15 @@ from tqdm import tqdm
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 STOCKFISH_PATH = os.environ.get("STOCKFISH_PATH", "stockfish")
-MODEL_NAME = "moonshotai/Kimi-K2.5"
+MODEL_NAME = "Qwen/Qwen3.5-35B-A3B"
 
 _USER_PREFIX = (
     "You are a grandmaster chess player. "
     "What should I respond in the following position, given in FEN notation?  "
 )
-_USER_SUFFIX = "\n\nGive your answer in UCI notation (e.g. g1f3) in <answer>...</answer> tags."
+_USER_SUFFIX = "\n\nGive your answer in SAN notation (e.g. Nf3) in <answer>...</answer> tags."
 
-_ANSWER_RE = re.compile(r"<answer>\s*([a-h][1-8][a-h][1-8][qrbn]?)\s*</answer>", re.IGNORECASE)
+_ANSWER_RE = re.compile(r"<answer>\s*([^<]+?)\s*</answer>")
 
 
 @dataclass
@@ -71,13 +71,13 @@ class GameRecord:
     moves: list[MoveRecord] = field(default_factory=list)
 
 
-def _parse_uci(text: str) -> str | None:
+def _parse_san(text: str) -> str | None:
     m = _ANSWER_RE.search(text)
-    return m.group(1).lower() if m else None
+    return m.group(1).strip() if m else None
 
 
 def _query_model(sampling_client, renderer, fen: str, max_tokens: int) -> tuple[str, str | None]:
-    """Query model. Returns (raw_response_text, parsed_uci_or_None)."""
+    """Query model. Returns (raw_response_text, parsed_san_or_None)."""
     messages = [{"role": "user", "content": _USER_PREFIX + fen + _USER_SUFFIX}]
     prompt = renderer.build_generation_prompt(messages)
     stop = renderer.get_stop_sequences()
@@ -87,7 +87,7 @@ def _query_model(sampling_client, renderer, fen: str, max_tokens: int) -> tuple[
         return "", None
     tokens = response.sequences[0].tokens
     text = renderer.tokenizer.decode(tokens, skip_special_tokens=True)
-    return text, _parse_uci(text)
+    return text, _parse_san(text)
 
 
 def _play_game(
@@ -109,23 +109,21 @@ def _play_game(
         model_turn = (board.turn == chess.WHITE) == model_is_white
 
         if model_turn:
-            raw, uci_parsed = _query_model(sampling_client, renderer, fen_before, max_tokens)
+            raw, san_parsed = _query_model(sampling_client, renderer, fen_before, max_tokens)
             move = None
             legal = False
-            if uci_parsed:
-                try:
-                    candidate = chess.Move.from_uci(uci_parsed)
-                    if candidate in board.legal_moves:
-                        move = candidate
-                        legal = True
-                except ValueError:
-                    pass
+            if san_parsed:
+                san_map = {board.san(mv): mv for mv in board.legal_moves}
+                san_map_norm = {s.rstrip("+#"): mv for s, mv in san_map.items()}
+                uci_map = {mv.uci(): mv for mv in board.legal_moves}
+                move = san_map.get(san_parsed) or san_map_norm.get(san_parsed.rstrip("+#")) or uci_map.get(san_parsed.lower())
+                legal = move is not None
             if move is None:
-                move = next(iter(board.legal_moves))  # fallback
+                move = next(iter(board.legal_moves))
 
             move_records.append(MoveRecord(
                 ply=ply, side="model", fen_before=fen_before,
-                raw_response=raw, uci_parsed=uci_parsed,
+                raw_response=raw, uci_parsed=san_parsed,
                 uci_played=move.uci(), legal=legal,
             ))
         else:
@@ -244,7 +242,7 @@ def main() -> None:
     sampling_client = service_client.create_sampling_client(model_path=args.checkpoint)
 
     tokenizer = get_tokenizer(MODEL_NAME)
-    renderer = get_renderer("kimi_k25", tokenizer)
+    renderer = get_renderer("qwen3", tokenizer)
 
     results: dict[int, dict[str, int]] = defaultdict(lambda: {"win": 0, "draw": 0, "loss": 0})
     total_games = len(args.depths) * args.games_per_depth
@@ -271,7 +269,8 @@ def main() -> None:
                 try:
                     fut.result()
                 except Exception as e:
-                    tqdm.write(f"  [D{depth:02d}] ERROR: {e}")
+                    import traceback
+                    tqdm.write(f"  [D{depth:02d}] ERROR: {e}\n{traceback.format_exc()}")
 
     print(f"\nGame log written to: {log_path}")
     print(f"\n{'Depth':>6} {'Win':>6} {'Draw':>6} {'Loss':>6} {'Win%':>7}")
