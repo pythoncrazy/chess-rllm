@@ -82,7 +82,7 @@ def load_jsonl_as_dataset(path: str):
     return ds
 
 
-@hydra.main(config_path="conf", config_name="sft", version_base=None)
+@hydra.main(config_path="../conf", config_name="sft", version_base=None)
 def main(config: DictConfig) -> None:
     train_files = config.data.get("train_files")
     val_files = config.data.get("val_files", None)
@@ -91,6 +91,10 @@ def main(config: DictConfig) -> None:
         raise ValueError("data.train_files must be set (path to JSONL)")
 
     train_dataset = load_jsonl_as_dataset(train_files)
+    max_samples = config.data.get("train_max_samples", -1)
+    if max_samples and max_samples > 0:
+        train_dataset = train_dataset.select(range(min(max_samples, len(train_dataset))))
+        logger.info(f"Truncated train dataset to {len(train_dataset)} samples")
     val_dataset = load_jsonl_as_dataset(val_files) if val_files else None
 
     with warnings.catch_warnings():

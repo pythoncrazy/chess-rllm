@@ -35,6 +35,7 @@ data:
   val_files: null
   train_batch_size: 512
   micro_batch_size_per_gpu: 512
+  train_max_samples: -1
   max_length: 256
   val_max_samples: 320
   renderer_name: "qwen3"

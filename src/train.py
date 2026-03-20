@@ -24,7 +24,7 @@ def _setup_rollout_file_logging(log_dir: str) -> None:
     logging.getLogger(__name__).info(f"Rollout logs -> {log_path}")
 
 
-@hydra.main(config_path="conf", config_name="train", version_base=None)
+@hydra.main(config_path="../conf", config_name="train", version_base=None)
 def main(config: DictConfig) -> None:
     """Train a chess RL agent with GRPO from pre-generated JSONL datasets.
 
