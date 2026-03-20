@@ -27,11 +27,11 @@ with warnings.catch_warnings():
 
 import random
 
+from prompt import format_prompt
+
 logger = logging.getLogger(__name__)
 
 _TOKENIZER_POOL = ThreadPoolExecutor(max_workers=32)
-_USER_PREFIX = "You are a grandmaster chess player. What should I respond in the following position, given in FEN notation?  "
-_USER_SUFFIX = "\n\nGive your answer in SAN notation (e.g. Nf3) in <answer>...</answer> tags."
 
 
 def _make_messages(fen: str, best: str, moves: dict) -> list[dict]:
@@ -42,8 +42,8 @@ def _make_messages(fen: str, best: str, moves: dict) -> list[dict]:
         if random.random() < 0.05:
             shuffled[i] = random.choice(top3)
     return [
-        {"role": "user", "content": _USER_PREFIX + fen + _USER_SUFFIX},
-        {"role": "assistant", "content": ", ".join(shuffled) + f"</think><answer>{best}</answer>"},
+        {"role": "user", "content": format_prompt(fen)},
+        {"role": "assistant", "content": ", ".join(shuffled) + f"</think><move>{best}</move>"},
     ]
 
 

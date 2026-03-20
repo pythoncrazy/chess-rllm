@@ -17,13 +17,9 @@ from rllm.rewards.reward_types import RewardOutput
 from rllm.workflows.simple_workflow import SimpleWorkflow
 from rllm.workflows.workflow import TerminationEvent, TerminationReason
 
-logger = logging.getLogger(__name__)
+from prompt import format_prompt
 
-_USER_PROMPT_PREFIX = (
-    "You are a grandmaster chess player. "
-    "What should I respond in the following position, given in FEN notation?  "
-)
-_USER_PROMPT_SUFFIX = "\n\nGive your answer in SAN notation (e.g. Nf3) in <answer>...</answer> tags."
+logger = logging.getLogger(__name__)
 
 STOCKFISH_PATH = os.environ.get("STOCKFISH_PATH", "stockfish")
 _SF_POOL_SIZE = int(os.environ.get("SF_POOL_SIZE", "8"))
@@ -121,7 +117,7 @@ def chess_reward_fn(task_info: dict, action: str) -> RewardOutput:
     """
     if not isinstance(action, str):
         action = action.action
-    m = re.search(r"<answer>(.*?)</answer>", action, re.DOTALL)
+    m = re.search(r"<move>(.*?)</move>", action, re.DOTALL)
     predicted = m.group(1).strip().rstrip("!?") if m else ""
 
     board = chess.Board(task_info["fen"])
@@ -161,7 +157,7 @@ class ChessWorkflow(SimpleWorkflow):
             Episode: Completed episode with reward.
         """
         self.reset(task, uid)
-        messages = [{"role": "user", "content": _USER_PROMPT_PREFIX + task["fen"] + _USER_PROMPT_SUFFIX}]
+        messages = [{"role": "user", "content": format_prompt(task["fen"])}]
 
         from rllm.engine import ModelOutput
         output: ModelOutput = await self.rollout_engine.get_model_response(messages, application_id=uid, **kwargs)

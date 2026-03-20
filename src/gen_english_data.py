@@ -25,6 +25,8 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
+from prompt import format_prompt
+
 load_dotenv()
 
 STOCKFISH_PATH = os.environ.get("STOCKFISH_PATH", "stockfish")
@@ -34,9 +36,6 @@ _BOOKS: list[tuple[str, str]] = [
     ("noob_5moves.epd", "https://github.com/official-stockfish/books/raw/refs/heads/master/noob_5moves.epd.zip"),
     ("UHO_4060_v4.epd", "https://raw.githubusercontent.com/official-stockfish/books/master/UHO_4060_v4.epd.zip"),
 ]
-_USER_PREFIX = "You are a grandmaster chess player. What should I respond in the following position, given in FEN notation?  "
-_USER_SUFFIX = "\n\nGive your answer in SAN notation (e.g. Nf3) in <answer>...</answer> tags."
-
 _engine: chess.engine.SimpleEngine | None = None
 _analysis_time: float = 0.2
 
@@ -128,7 +127,7 @@ async def _call_gemini(
     row: dict,
 ) -> dict | None:
     prompt = _build_prompt(row)
-    user_content = _USER_PREFIX + row["fen"] + _USER_SUFFIX
+    user_content = format_prompt(row["fen"])
     async with sem:
         response = await client.aio.models.generate_content(
             model="gemini-3.1-flash-lite-preview",
@@ -139,13 +138,16 @@ async def _call_gemini(
             ),
         )
     text = (response.text or "").strip()
-    if f"<answer>{row['best']}</answer>" not in text:
+    if f"<answer>{row['best']}</answer>" not in text and f"<move>{row['best']}</move>" not in text:
         return None
-    # Strip any <think> wrapper Gemini may have added; renderer adds its own
     if text.startswith("<think>"):
         text = text[len("<think>"):]
+    tag = f"<move>{row['best']}</move>" if f"<move>{row['best']}</move>" in text else f"<answer>{row['best']}</answer>"
+    replacement = f"<move>{row['best']}</move>"
     if "</think>" not in text:
-        text = text.replace(f"<answer>{row['best']}</answer>", f"</think><answer>{row['best']}</answer>", 1)
+        text = text.replace(tag, f"</think>{replacement}", 1)
+    else:
+        text = text.replace(tag, replacement, 1)
     return {
         "fen": row["fen"],
         "move": row["best"],

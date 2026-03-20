@@ -35,18 +35,14 @@ from tinker_cookbook.renderers import get_renderer
 from tinker_cookbook.tokenizer_utils import get_tokenizer
 from tqdm import tqdm
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent))
+
+from prompt import format_prompt  # noqa: E402
 
 STOCKFISH_PATH = os.environ.get("STOCKFISH_PATH", "stockfish")
 MODEL_NAME = "Qwen/Qwen3.5-35B-A3B"
 
-_USER_PREFIX = (
-    "You are a grandmaster chess player. "
-    "What should I respond in the following position, given in FEN notation?  "
-)
-_USER_SUFFIX = "\n\nGive your answer in SAN notation (e.g. Nf3) in <answer>...</answer> tags."
-
-_ANSWER_RE = re.compile(r"<answer>\s*([^<]+?)\s*</answer>")
+_MOVE_RE = re.compile(r"<move>\s*([^<]+?)\s*</move>")
 
 
 @dataclass
@@ -72,13 +68,13 @@ class GameRecord:
 
 
 def _parse_san(text: str) -> str | None:
-    m = _ANSWER_RE.search(text)
+    m = _MOVE_RE.search(text)
     return m.group(1).strip() if m else None
 
 
 def _query_model(sampling_client, renderer, fen: str, max_tokens: int) -> tuple[str, str | None]:
     """Query model. Returns (raw_response_text, parsed_san_or_None)."""
-    messages = [{"role": "user", "content": _USER_PREFIX + fen + _USER_SUFFIX}]
+    messages = [{"role": "user", "content": format_prompt(fen)}]
     prompt = renderer.build_generation_prompt(messages)
     stop = renderer.get_stop_sequences()
     params = tinker.types.SamplingParams(max_tokens=max_tokens, temperature=0.0, stop=stop)
