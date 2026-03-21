@@ -18,14 +18,15 @@ val_files: null
 val_puzzles: null
 
 training:
-  group_size: 8           # 8 samples per position is enough for GRPO; halves rollout count vs default 16
+  default_local_dir: "checkpoints/grpo/${run_name}"
+  group_size: 8           # 8 samples per position; balance between variance and throughput
 
 data:
-  train_batch_size: 32    # 32 positions × 8 rollouts = 256 total per step
-  max_response_length: 128  # chess UCI + short CoT fit in 128 tokens; smaller = more concurrent Tinker batches
+  train_batch_size: 32    # 32 positions × 8 rollouts = 256 rollouts/step
+  max_response_length: 1024  # enough for board CoT + <move>...</move>
 
 workflow:
-  n_parallel_tasks: 512   # run all 256 rollouts in one wave (up from 256)
+  n_parallel_tasks: 512
 
 rllm:
   trainer:
@@ -33,7 +34,7 @@ rllm:
     experiment_name: "grpo-${run_name}"
     default_local_dir: "checkpoints/grpo/${run_name}"
     logger: ["console", "ui"]
-    max_steps: 50           # 50 steps/epoch × 10 epochs = 500 gradient updates total
-    total_epochs: 10
-    save_freq: 2
-    test_freq: 10
+    max_steps: 2000
+    total_epochs: 1
+    save_freq: 25
+    test_freq: 50
