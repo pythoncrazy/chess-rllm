@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from prompt import format_prompt
 
 STOCKFISH_PATH = os.environ.get("STOCKFISH_PATH", "stockfish")
-MODEL_NAME = "Qwen/Qwen3.5-35B-A3B"
+MODEL_NAME = "Qwen/Qwen3-30B-A3B"
 _MOVE_RE = re.compile(r"<move>\s*([^<]+?)\s*</move>")
 
 
