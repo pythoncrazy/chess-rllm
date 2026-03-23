@@ -27,6 +27,8 @@ with warnings.catch_warnings():
 
 import random
 
+import chess
+
 from prompt import format_prompt
 
 logger = logging.getLogger(__name__)
@@ -34,16 +36,21 @@ logger = logging.getLogger(__name__)
 _TOKENIZER_POOL = ThreadPoolExecutor(max_workers=32)
 
 
+def _uci_to_san(fen: str, uci: str) -> str:
+    board = chess.Board(fen)
+    return board.san(chess.Move.from_uci(uci))
+
+
 def _make_messages(fen: str, best: str, moves: dict) -> list[dict]:
-    top3 = sorted(moves, key=lambda s: moves[s]["score"], reverse=True)
+    board = chess.Board(fen)
+    uci_map = {mv.uci(): board.san(mv) for mv in board.legal_moves}
+    top3 = [uci_map.get(u, u) for u in sorted(moves, key=lambda s: moves[s]["score"], reverse=True)[:3]]
+    best_san = uci_map.get(best, best)
     shuffled = top3.copy()
     random.shuffle(shuffled)
-    for i in range(len(shuffled)):
-        if random.random() < 0.05:
-            shuffled[i] = random.choice(top3)
     return [
         {"role": "user", "content": format_prompt(fen)},
-        {"role": "assistant", "content": ", ".join(shuffled) + f"</think><move>{best}</move>"},
+        {"role": "assistant", "content": ", ".join(shuffled) + f"</think><move>{best_san}</move>"},
     ]
 
 
@@ -59,7 +66,15 @@ def _fast_get_batch(self, index: int) -> list[tinker.Datum]:
     end_idx = min(start_idx + self.batch_size, len(self.dataset))
     batch = self.dataset[start_idx:end_idx]
     if "messages" in batch and batch["messages"][0] is not None:
-        messages_list = batch["messages"]
+        messages_list = [
+            [
+                {"role": "user", "content": format_prompt(fen)}
+                if msg["role"] == "user"
+                else {**msg, "content": msg["content"].replace("<answer>", "<move>").replace("</answer>", "</move>")}
+                for msg in msgs
+            ]
+            for fen, msgs in zip(batch["fen"], batch["messages"])
+        ]
     else:
         messages_list = [_make_messages(f, m, t) for f, m, t in zip(batch["fen"], batch["move"], batch["moves"])]
 

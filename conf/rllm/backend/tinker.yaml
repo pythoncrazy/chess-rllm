@@ -4,7 +4,7 @@ tinker_base_url: null
 fuse_forward_backward_and_optim_step: false
 
 model:
-  name: "Qwen/Qwen3.5-4B"
+  name: "Qwen/Qwen3.5-35B-A3B"
   lora_rank: 32
   train_unembed: true
   train_attn: true

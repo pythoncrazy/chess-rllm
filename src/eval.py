@@ -25,6 +25,7 @@ STOCKFISH_PATH = os.environ.get("STOCKFISH_PATH", "stockfish")
 _SF_POOL_SIZE = int(os.environ.get("SF_POOL_SIZE", "8"))
 _SF_TIME = float(os.environ.get("SF_TIME", "0.05"))
 _SF_LOSS_SCALE = float(os.environ.get("SF_LOSS_SCALE", "50"))
+_SF_BLUNDER_THRESHOLD = int(os.environ.get("SF_BLUNDER_THRESHOLD", "-1"))  # cp; -1 = disabled
 _MAX_CP = 10_000
 
 _engine_pool: queue.Queue | None = None
@@ -102,7 +103,10 @@ def _sf_loss_reward(board: chess.Board, move: chess.Move) -> float:
             return 0.5
         pred_cp = -_cp(engine.analyse(board, chess.engine.Limit(time=_SF_TIME))["score"].relative)
         board.pop()
-    return math.exp(-max(0, best_cp - pred_cp) / _SF_LOSS_SCALE)
+    cp_loss = best_cp - pred_cp
+    if _SF_BLUNDER_THRESHOLD >= 0 and cp_loss > _SF_BLUNDER_THRESHOLD:
+        return 0.0
+    return math.exp(-max(0, cp_loss) / _SF_LOSS_SCALE)
 
 
 def chess_reward_fn(task_info: dict, action: str) -> RewardOutput:
