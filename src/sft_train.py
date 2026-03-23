@@ -25,6 +25,7 @@ with warnings.catch_warnings():
     warnings.simplefilter("ignore", FutureWarning)
     from rllm.trainer.deprecated.tinker_sft_dataset import TinkerSFTDataset
 
+import math
 import random
 
 import chess
@@ -36,21 +37,23 @@ logger = logging.getLogger(__name__)
 _TOKENIZER_POOL = ThreadPoolExecutor(max_workers=32)
 
 
-def _uci_to_san(fen: str, uci: str) -> str:
-    board = chess.Board(fen)
-    return board.san(chess.Move.from_uci(uci))
+def _cp_to_wp(cp: int) -> float:
+    """Convert centipawn score to win probability using standard Stockfish sigmoid."""
+    return 1 / (1 + math.exp(-cp / 176))
 
 
 def _make_messages(fen: str, best: str, moves: dict) -> list[dict]:
     board = chess.Board(fen)
     uci_map = {mv.uci(): board.san(mv) for mv in board.legal_moves}
-    top3 = [uci_map.get(u, u) for u in sorted(moves, key=lambda s: moves[s]["score"], reverse=True)[:3]]
+    sorted_ucis = sorted(moves, key=lambda u: moves[u]["score"], reverse=True)[:3]
+    top3 = [(uci_map.get(u, u), moves[u]["score"]) for u in sorted_ucis]
     best_san = uci_map.get(best, best)
     shuffled = top3.copy()
     random.shuffle(shuffled)
+    think_str = ", ".join(f"{san} (wp={_cp_to_wp(score):.2f})" for san, score in shuffled)
     return [
         {"role": "user", "content": format_prompt(fen)},
-        {"role": "assistant", "content": ", ".join(shuffled) + f"</think><move>{best_san}</move>"},
+        {"role": "assistant", "content": think_str + f"</think><move>{best_san}</move>"},
     ]
 
 

@@ -16,7 +16,7 @@ run_name: ???
 
 model:
   name: "Qwen/Qwen3.5-35B-A3B"
-  lora_rank: 32
+  lora_rank: 64
   train_unembed: true
   train_attn: true
   train_mlp: true
